@@ -21,7 +21,7 @@ Plugins / Elements
 | Element     | Type   | Description |
 |-------------|--------|-------------|
 | `ahc2src`   | source | Captures frames from the Android Camera2 NDK. Produces `video/x-raw(memory:GLMemory)` (RGBA, zero-copy GL path) or `video/x-raw` (NV12, software fallback path). |
-| `ahc2sink`  | sink   | Renders frames into an `ANativeWindow` (Android Surface). Provided as a standalone sink; the demo app uses `glimagesink` paired with the GL zero-copy path. |
+| `ahc2sink`  | sink   | Renders frames to an `ANativeWindow` (Android Surface). Supports two modes: **Mode B / Lock** (`ANativeWindow_lock` + per-row `memcpy` + `unlockAndPost`) — universal but not zero-copy; and **Mode A / Surface Bypass** — wires the camera output directly to the sink's surface for true zero-copy. The demo app does not use this sink; it uses `glimagesink` with the GL zero-copy path of `ahc2src`. |
 
 Internal supporting components:
 
@@ -38,6 +38,36 @@ Example pipeline used by the demo app:
 ```
 ahc2src ! capsfilter caps=video/x-raw(memory:GLMemory),format=RGBA ! glimagesink
 ```
+
+
+### `ahc2sink` rendering modes
+
+`ahc2sink` outputs to an Android `ANativeWindow` and supports two distinct
+modes selected via the `bypass-mode` property
+(`auto` (default) / `force-bypass` / `force-lock`):
+
+| Mode | Mechanism | Zero-copy? |
+|------|-----------|------------|
+| **B — Lock (default)** | `ANativeWindow_lock` → `gst_buffer_map(READ)` → row-by-row `memcpy` → `ANativeWindow_unlockAndPost` | ❌ No (one `memcpy` per frame) |
+| **A — Surface Bypass** | `ahc2sink` posts a `GstContext` carrying its `ANativeWindow *`; `ahc2src` catches it and uses that surface directly as the Camera2 capture session's output target. `show_frame` becomes a no-op (counter only). | ✅ Yes |
+
+In Mode A no `GstBuffer` ever carries pixel data through the pipeline —
+the camera HAL writes straight to the sink's surface. This requires
+`ahc2src` and `ahc2sink` to be paired (or another producer that supports
+the `surface-bypass` caps feature, see
+`app/src/main/jni/common/gstahc2protocol.h`).
+
+Mode selection during caps negotiation:
+- `auto` — Mode A if upstream caps include `memory:GstAhc2SurfaceBypass`,
+  otherwise Mode B.
+- `force-bypass` — fail caps negotiation if upstream cannot do bypass.
+- `force-lock` — never use bypass even if available.
+
+> Note: the demo app uses `glimagesink` (not `ahc2sink`), which is also
+> zero-copy via the AHardwareBuffer → EGLImage → GL texture path.
+> `ahc2sink` is provided as a standalone option for pipelines that don't
+> need a GL context (e.g. background capture-and-display) and want
+> end-to-end zero-copy through the surface-bypass path.
 
 
 Demo App Features
@@ -233,8 +263,12 @@ Limitations and Known issues
 - Initial preview resolution is whatever caps negotiation chooses; the demo
   app's resolution radio buttons (320 / 640 / 1280 / 1920) are not always
   what the camera starts at. Tap one explicitly to switch.
-- `ahc2sink` is provided as a standalone sink element but the demo app uses
-  `glimagesink` paired with the GL zero-copy path of `ahc2src`.
+- `ahc2sink`'s default mode (Lock) is **not** zero-copy — it does one
+  `memcpy` per frame inside `ANativeWindow_lock` / `unlockAndPost`. To get
+  end-to-end zero-copy through `ahc2sink`, set the `bypass-mode` property
+  to `force-bypass` (or pair it with `ahc2src` so the `auto` mode picks
+  bypass during caps negotiation). The demo app sidesteps this by using
+  `glimagesink` with the GL zero-copy path of `ahc2src`.
 - Android API 26+ is required because the Camera2 NDK
   (`<camera/NdkCameraDevice.h>`) was added in API 24/26 and the AHardwareBuffer
   + EGL bridge requires that level.

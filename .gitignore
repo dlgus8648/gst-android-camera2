@@ -1,0 +1,38 @@
+# ── Android / Gradle build artifacts ──────────────────────────
+build/
+*/build/
+.gradle/
+captures/
+.externalNativeBuild/
+.cxx/
+*/.cxx/
+
+# ── Local / machine-specific config ───────────────────────────
+/local.properties
+
+# ── Generated GStreamer Android NDK build outputs (per-ABI dirs) ──
+/app/gst-android-build/
+
+# ── GStreamer SDK Java glue (auto-copied by ndk-build from GSTREAMER_ROOT) ──
+# These files come from the GStreamer Android SDK at build time and must not
+# be committed; they are regenerated when anyone with GSTREAMER_ROOT_ANDROID
+# set runs ./gradlew installDebug.
+/app/src/main/java/org/freedesktop/gstreamer/GStreamer.java
+/app/src/main/java/org/freedesktop/gstreamer/androidmedia/
+
+# ── IntelliJ / Android Studio ─────────────────────────────────
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# ── Other editors ─────────────────────────────────────────────
+.vscode/
+
+# ── Editor / OS junk ──────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.bak
+*~
+.~lock.*#

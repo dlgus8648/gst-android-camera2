@@ -449,6 +449,10 @@ ahc2_aimage_to_gl_buffer (GstAhc2Src * self, AImage * aimg)
     return NULL;
   }
 
+  /* D 시도 결과: GL_TEXTURE_2D 바인딩으로 변경했더니 raw YUV bytes 가 sampler2D
+   * 로 sample 되어 화면 이상한 색. 자동 YUV→RGB 변환은 GL_TEXTURE_EXTERNAL_OES
+   * 만 처리하는 EGLImage extension 동작 — external-oes 그대로 유지.
+   * GL zero-copy 회복하려면 ahc2src 자체에 YUV→RGB shader 추가 필요 (별도 작업). */
   GstGLVideoAllocationParams *params =
       gst_gl_video_allocation_params_new_wrapped_gl_handle (
           self->gl_context, NULL, &vinfo,  0, NULL,
@@ -725,20 +729,42 @@ gst_ahc2_src_set_caps (GstBaseSrc * bsrc, GstCaps * caps)
     GST_ERROR_OBJECT (self, "set_caps: gst_video_info_from_caps failed");
     return FALSE;
   }
-  self->width  = GST_VIDEO_INFO_WIDTH (&info);
-  self->height = GST_VIDEO_INFO_HEIGHT (&info);
-  self->fps_n  = GST_VIDEO_INFO_FPS_N (&info);
-  self->fps_d  = GST_VIDEO_INFO_FPS_D (&info);
 
-  if ((self->width & 1) || (self->height & 1)) {
+  gint new_width  = GST_VIDEO_INFO_WIDTH (&info);
+  gint new_height = GST_VIDEO_INFO_HEIGHT (&info);
+  gint new_fps_n  = GST_VIDEO_INFO_FPS_N (&info);
+  gint new_fps_d  = GST_VIDEO_INFO_FPS_D (&info);
+
+  if ((new_width & 1) || (new_height & 1)) {
     GST_ERROR_OBJECT (self, "set_caps: odd size %dx%d not allowed for YUV420",
-        self->width, self->height);
+        new_width, new_height);
     return FALSE;
   }
 
   GstCapsFeatures *feat = gst_caps_get_features (caps, 0);
-  self->use_gl_memory = (feat != NULL &&
+  gboolean new_use_gl_memory = (feat != NULL &&
       gst_caps_features_contains (feat, GST_CAPS_FEATURE_MEMORY_GL_MEMORY));
+
+  /* Idempotent set_caps — GStreamer 의 caps 재협상은 downstream element 추가 시
+   * (e.g. tee 동적 add) 흔히 발생. 같은 caps 로 재호출이면 capture session 을
+   * destroy/재생성하지 말고 그대로 유지해야 streaming thread 가 끊기지 않음.
+   * 이건 모든 source element 의 표준 책임. */
+  if (self->session != NULL &&
+      self->width  == new_width  && self->height == new_height &&
+      self->fps_n  == new_fps_n  && self->fps_d  == new_fps_d &&
+      self->use_gl_memory == new_use_gl_memory) {
+    GST_INFO_OBJECT (self,
+        "set_caps: identical caps (%dx%d@%d/%d, gl=%s) — keeping capture session",
+        new_width, new_height, new_fps_n, new_fps_d,
+        new_use_gl_memory ? "TRUE" : "FALSE");
+    return TRUE;
+  }
+
+  self->width  = new_width;
+  self->height = new_height;
+  self->fps_n  = new_fps_n;
+  self->fps_d  = new_fps_d;
+  self->use_gl_memory = new_use_gl_memory;
   GST_INFO_OBJECT (self, "set_caps: %dx%d@%d/%d, use_gl_memory=%s",
       self->width, self->height, self->fps_n, self->fps_d,
       self->use_gl_memory ? "TRUE" : "FALSE");
